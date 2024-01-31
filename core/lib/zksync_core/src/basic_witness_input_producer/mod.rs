@@ -5,15 +5,20 @@ use async_trait::async_trait;
 use multivm::{
     interface::{L2BlockEnv, VmInterface},
     vm_latest::HistoryEnabled,
+    VmInstance,
 };
 use tokio::{runtime::Handle, task::JoinHandle};
-use vm_utils::{create_vm_for_l1_batch, execute_tx};
+use vm_utils::{execute_tx, prepare_vm_env_for_l1_batch};
 use zksync_dal::{basic_witness_input_producer_dal::JOB_MAX_ATTEMPT, ConnectionPool};
 use zksync_object_store::{ObjectStore, ObjectStoreFactory};
 use zksync_queued_job_processor::JobProcessor;
-use zksync_types::{witness_block_state::WitnessBlockState, L1BatchNumber, L2ChainId};
+use zksync_state::{PostgresStorage, StorageView};
+use zksync_types::{
+    witness_block_state::WitnessBlockState, L1BatchNumber, L2ChainId, MiniblockNumber,
+};
 
 use self::metrics::METRICS;
+use crate::state_keeper::updates::miniblock_updates;
 
 mod metrics;
 /// Component that extracts all data (from DB) necessary to run a Basic Witness Generator.
@@ -58,15 +63,18 @@ impl BasicWitnessInputProducer {
                 .get_miniblocks_to_execute_for_l1_batch(l1_batch_number),
         )?;
 
-        let (mut vm, storage_view) = rt_handle
-            .block_on(create_vm_for_l1_batch::<HistoryEnabled>(
+        let (vm_env, miniblock_number) = rt_handle
+            .block_on(prepare_vm_env_for_l1_batch(
                 l1_batch_number,
                 l2_chain_id,
-                rt_handle.clone(),
-                connection,
+                &mut connection,
             ))
             .context("failed to create vm for BasicWitnessInputProducer")?;
+        let pg_storage: PostgresStorage<'_> =
+            PostgresStorage::new(rt_handle.clone(), connection, miniblock_number, true);
 
+        let storage_view = StorageView::new(pg_storage).to_rc_ptr();
+        let mut vm = VmInstance::new(vm_env.l1_batch_env, vm_env.system_env, storage_view.clone());
         tracing::info!("Started execution of l1_batch: {l1_batch_number:?}");
 
         let next_miniblocks_data = miniblocks_execution_data
@@ -84,7 +92,7 @@ impl BasicWitnessInputProducer {
             );
             for tx in &miniblock_data.txs {
                 tracing::trace!("Started execution of tx: {tx:?}");
-                execute_tx(tx, &mut vm)
+                execute_tx(tx, &mut vm, vec![])
                     .context("failed to execute transaction in BasicWitnessInputProducer")?;
                 tracing::trace!("Finished execution of tx: {tx:?}");
             }

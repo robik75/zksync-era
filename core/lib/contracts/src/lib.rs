@@ -238,7 +238,7 @@ pub fn read_proved_batch_bootloader_bytecode() -> Vec<u8> {
 }
 
 pub fn read_playground_batch_bootloader_bytecode() -> Vec<u8> {
-    read_bootloader_code("playground_batch")
+    read_bootloader_code("playground_with_fake")
 }
 
 pub fn get_loadnext_test_contract_path(file_name: &str, contract_name: &str) -> String {

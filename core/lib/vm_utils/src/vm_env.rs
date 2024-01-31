@@ -23,6 +23,7 @@ pub struct VmEnvBuilder {
     l1_batch_number: L1BatchNumber,
     prev_batch_hash: Option<H256>,
     fee_account: Option<Address>,
+    base_system_contracts: Option<BaseSystemContracts>,
     validation_computational_gas_limit: u32,
     chain_id: L2ChainId,
 }
@@ -40,8 +41,18 @@ impl VmEnvBuilder {
             miniblock_number: None,
             prev_batch_hash: None,
             fee_account: None,
+            base_system_contracts: None,
         }
     }
+
+    pub fn with_base_system_contracts(
+        mut self,
+        base_system_contracts: BaseSystemContracts,
+    ) -> Self {
+        self.base_system_contracts = Some(base_system_contracts);
+        self
+    }
+
     pub fn with_miniblock_number(mut self, miniblock_number: MiniblockNumber) -> Self {
         self.miniblock_number = Some(miniblock_number);
         self
@@ -76,36 +87,44 @@ impl VmEnvBuilder {
             .get_miniblock_header(pending_miniblock_number)
             .await
             .unwrap()?;
+        dbg!(pending_miniblock_number);
 
         tracing::info!("Getting previous miniblock hash");
         let prev_miniblock_hash = connection
             .blocks_dal()
             .get_miniblock_header(pending_miniblock_number - 1)
             .await
-            .unwrap()
-            .unwrap()
+            .unwrap()?
             .hash;
+        tracing::info!("Getting fee account");
         let fee_account = if let Some(fee_account) = self.fee_account {
             fee_account
         } else {
+            dbg!(self.l1_batch_number);
             connection
                 .blocks_dal()
                 .get_fee_address_for_l1_batch(self.l1_batch_number)
                 .await
                 .unwrap()?
         };
-        let base_system_contracts = connection
-            .storage_dal()
-            .get_base_system_contracts(
-                pending_miniblock_header
-                    .base_system_contracts_hashes
-                    .bootloader,
-                pending_miniblock_header
-                    .base_system_contracts_hashes
-                    .default_aa,
-            )
-            .await;
 
+        tracing::info!("Getting base sysstem ");
+        let base_system_contracts = if let Some(contracts) = self.base_system_contracts {
+            contracts
+        } else {
+            connection
+                .storage_dal()
+                .get_base_system_contracts(
+                    pending_miniblock_header
+                        .base_system_contracts_hashes
+                        .bootloader,
+                    pending_miniblock_header
+                        .base_system_contracts_hashes
+                        .default_aa,
+                )
+                .await
+        };
+        tracing::info!("Getting batch hash");
         let previous_l1_batch_hash = if let Some(previous_l1_batch_hash) = self.prev_batch_hash {
             previous_l1_batch_hash
         } else {

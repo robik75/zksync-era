@@ -1,7 +1,19 @@
 use std::sync::Arc;
 
-use multivm::{interface::ExecutionResult, vm_latest::constants::BLOCK_GAS_LIMIT};
+use anyhow::Context;
+use multivm::{
+    interface::{ExecutionResult, VmInterface},
+    tracers::CallTracer,
+    vm_latest::constants::BLOCK_GAS_LIMIT,
+    zk_evm_1_3_1::zkevm_opcode_defs::decoding::AllowedPcOrImm,
+    zk_evm_1_4_1::sha3::digest::typenum::Min,
+    MultiVMTracer, VmInstance,
+};
 use once_cell::sync::OnceCell;
+use vm_utils::{execute_tx, vm_env::VmEnvBuilder};
+use zksync_contracts::BaseSystemContracts;
+use zksync_dal::connection;
+use zksync_state::{PostgresStorage, StorageView};
 use zksync_system_constants::MAX_ENCODED_TX_SIZE;
 use zksync_types::{
     api::{BlockId, BlockNumber, DebugCall, ResultDebugCall, TracerConfig},
@@ -9,12 +21,12 @@ use zksync_types::{
     l2::L2Tx,
     transaction_request::CallRequest,
     vm_trace::Call,
-    AccountTreeId, H256,
+    AccountTreeId, L1BatchNumber, MiniblockNumber, H256,
 };
 use zksync_web3_decl::error::Web3Error;
 
 use crate::api_server::{
-    execution_sandbox::{ApiTracer, TxSharedArgs},
+    execution_sandbox::{ApiTracer, TxSharedArgs, VmConcurrencyLimiter},
     tx_sender::{ApiContracts, TxSenderConfig},
     web3::{backend_jsonrpsee::internal_error, metrics::API_METRICS, state::RpcState},
 };
@@ -109,14 +121,103 @@ impl DebugNamespace {
             .access_storage_tagged("api")
             .await
             .map_err(|err| internal_error(METHOD_NAME, err))?;
-        let call_trace = connection.transactions_dal().get_call_trace(tx_hash).await;
-        Ok(call_trace.map(|call_trace| {
-            let mut result: DebugCall = call_trace.into();
-            if only_top_call {
-                result.calls = vec![];
+
+        let receipt = connection
+            .transactions_web3_dal()
+            .get_transaction_receipt(tx_hash)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let miniblock_data = connection
+            .transactions_dal()
+            .get_miniblock_to_execute(MiniblockNumber(receipt.block_number.as_u32()), Some(1))
+            .await
+            .unwrap()
+            .unwrap();
+
+        let tx_hash = miniblock_data.txs.last().unwrap().hash();
+        let receipt = connection
+            .transactions_web3_dal()
+            .get_transaction_receipt(tx_hash)
+            .await
+            .unwrap()
+            .unwrap();
+        let call_trace = connection
+            .transactions_dal()
+            .get_call_trace(tx_hash)
+            .await
+            .unwrap()
+            .calls;
+        let mut vm_env = VmEnvBuilder::new(
+            L1BatchNumber(receipt.l1_batch_number.unwrap().as_u32()),
+            BLOCK_GAS_LIMIT,
+            self.state.api_config.l2_chain_id,
+        )
+        .with_miniblock_number(miniblock_data.number)
+        .with_base_system_contracts(BaseSystemContracts::playground())
+        .build(&mut connection)
+        .await
+        .unwrap();
+        let vm_permit = self
+            .state
+            .tx_sender
+            .vm_concurrency_limiter()
+            .acquire()
+            .await
+            .unwrap();
+        drop(connection);
+        let connection_pool = self.state.connection_pool.clone();
+        let call_trace = tokio::task::spawn_blocking(move || {
+            let rt_handle = vm_permit.rt_handle().clone();
+            let connection = rt_handle
+                .block_on(connection_pool.access_storage())
+                .unwrap();
+            let pg_storage = PostgresStorage::new(
+                rt_handle.clone(),
+                connection,
+                miniblock_data.number - 1,
+                true,
+            );
+
+            let storage_view = StorageView::new(pg_storage).to_rc_ptr();
+            vm_env.l1_batch_env.previous_batch_hash = None;
+            let mut vm =
+                VmInstance::new(vm_env.l1_batch_env, vm_env.system_env, storage_view.clone());
+            for tx in &miniblock_data.txs[..receipt.transaction_index.as_u64() as usize] {
+                tracing::trace!("Started execution of tx: {tx:?}");
+                execute_tx(tx, &mut vm, vec![]).unwrap();
+                tracing::trace!("Finished execution of tx: {tx:?}");
             }
-            result
-        }))
+            let call_tracer_result = Arc::new(OnceCell::default());
+            let call_tracer = CallTracer::new(call_tracer_result.clone());
+            let last_tx = miniblock_data.txs.last().unwrap();
+            execute_tx(last_tx, &mut vm, vec![call_tracer.into_tracer_pointer()]).unwrap();
+            let trace = Arc::try_unwrap(call_tracer_result)
+                .unwrap()
+                .take()
+                .unwrap_or_default();
+
+            assert_eq!(trace, call_trace);
+            let call_trace = Call::new_high_level(
+                last_tx.gas_limit().as_u32(),
+                receipt.gas_used.unwrap().as_u32(),
+                last_tx.execute.value,
+                last_tx.execute.calldata.clone(),
+                vec![],
+                None,
+                trace,
+            );
+            print!("fuck");
+            call_trace
+        })
+        .await
+        .unwrap();
+        let mut result: DebugCall = call_trace.into();
+        if only_top_call {
+            result.calls = vec![];
+        }
+        Ok(Some(result))
     }
 
     #[tracing::instrument(skip(self, request, block_id))]

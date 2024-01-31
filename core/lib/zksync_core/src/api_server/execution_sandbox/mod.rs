@@ -44,7 +44,7 @@ pub struct VmPermit {
 }
 
 impl VmPermit {
-    fn rt_handle(&self) -> &Handle {
+    pub fn rt_handle(&self) -> &Handle {
         &self.rt_handle
     }
 }

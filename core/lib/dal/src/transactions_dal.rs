@@ -1186,6 +1186,45 @@ impl TransactionsDal<'_, '_> {
         self.get_miniblocks_to_execute(transactions).await
     }
 
+    /// Returns miniblock with their transactions to be used in VM execution.
+    /// The order of the transactions is the same as it was during previous execution.
+    /// All transactions are retrieved for the given miniblock.
+    pub async fn get_miniblock_to_execute(
+        &mut self,
+        miniblock_number: MiniblockNumber,
+        max_tx_index: Option<u32>,
+    ) -> anyhow::Result<Option<MiniblockExecutionData>> {
+        let transactions = sqlx::query_as!(
+            StorageTransaction,
+            r#"
+            SELECT
+                *
+            FROM
+                transactions
+            WHERE
+                miniblock_number = $1
+                AND index_in_block <= $2
+            ORDER BY
+                index_in_block
+            "#,
+            miniblock_number.0 as i64,
+            max_tx_index.map(|index| index as i32).unwrap_or(i32::MAX),
+        )
+        .fetch_all(self.storage.conn())
+        .await?;
+
+        if transactions.len() == 0 {
+            return Ok(None);
+        }
+
+        // It's safe to get the first element here, because we know that there is at least one element in the vector
+        Ok(self
+            .get_miniblocks_to_execute(transactions)
+            .await?
+            .into_iter()
+            .nth(0))
+    }
+
     async fn get_miniblocks_to_execute(
         &mut self,
         transactions: Vec<StorageTransaction>,
@@ -1337,7 +1376,7 @@ impl TransactionsDal<'_, '_> {
         }
     }
 
-    pub(crate) async fn get_tx_by_hash(&mut self, hash: H256) -> Option<Transaction> {
+    pub async fn get_tx_by_hash(&mut self, hash: H256) -> Option<Transaction> {
         sqlx::query_as!(
             StorageTransaction,
             r#"

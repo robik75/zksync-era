@@ -566,6 +566,7 @@ impl TransactionRequest {
                 let (_, tx_chain_id) = PackedEthSignature::unpack_v(v)
                     .map_err(|_| SerializationTransactionError::MalformedSignature)?;
                 if tx_chain_id.is_some() && tx_chain_id != Some(chain_id.as_u64()) {
+                    dbg!(chain_id.as_u64());
                     return Err(SerializationTransactionError::WrongChainId(tx_chain_id));
                 }
                 Self {
@@ -591,6 +592,7 @@ impl TransactionRequest {
 
                 let tx_chain_id = rlp.val_at(0).ok();
                 if tx_chain_id != Some(chain_id.as_u64()) {
+                    dbg!(chain_id.as_u64());
                     return Err(SerializationTransactionError::WrongChainId(tx_chain_id));
                 }
                 Self {
@@ -612,6 +614,7 @@ impl TransactionRequest {
                 }
                 let tx_chain_id = rlp.val_at(10).ok();
                 if tx_chain_id.is_some() && tx_chain_id != Some(chain_id.as_u64()) {
+                    dbg!(chain_id.as_u64());
                     return Err(SerializationTransactionError::WrongChainId(tx_chain_id));
                 }
 
