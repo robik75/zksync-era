@@ -39,7 +39,7 @@ jobs:
 
           COMPILERS_JSON='${{ inputs.compilers }}'
           echo "$COMPILERS_JSON" | jq -r '.[] | to_entries[] | .key as $compiler | .value[] | "\(.),\($compiler)"' | while IFS=, read -r version compiler; do
-            echo $compiler
+            echo $version
             mkdir -p "./hardhat-nodejs/compilers-v2/$compiler"
             wget -nv -O "./hardhat-nodejs/compilers-v2/$compiler/${compiler}-v${version}" "https://github.com/matter-labs/${compiler}-bin/releases/download/v${version}/${compiler}-linux-amd64-musl-v${version}"
             chmod +x "./hardhat-nodejs/compilers-v2/$compiler/${compiler}-v${version}"
