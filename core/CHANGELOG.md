@@ -1,5 +1,17 @@
 # Changelog
 
+## [20.7.0](https://github.com/matter-labs/zksync-era/compare/core-v20.6.0...core-v20.7.0) (2024-02-14)
+
+
+### Features
+
+* **commitment:** Commitment component ([#1024](https://github.com/matter-labs/zksync-era/issues/1024)) ([60305ba](https://github.com/matter-labs/zksync-era/commit/60305ba2fdb211c4053ab40e0e6c55d4e6f337b0))
+
+
+### Bug Fixes
+
+* Token distribution ([#1051](https://github.com/matter-labs/zksync-era/issues/1051)) ([bd63b3a](https://github.com/matter-labs/zksync-era/commit/bd63b3aa90931b19e31cda17f70db04a1e7e068b))
+
 ## [20.6.0](https://github.com/matter-labs/zksync-era/compare/core-v20.5.2...core-v20.6.0) (2024-02-08)
 
 
